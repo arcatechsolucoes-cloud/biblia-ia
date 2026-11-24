@@ -39,6 +39,10 @@ main#chat{display:flex;flex-direction:column;gap:12px;padding:6px 0 clamp(120px,
 .esb h4{margin:10px 0 2px;font-size:.95rem}
 .esb .passagem{color:var(--accent);font-weight:600}
 .esb .ideia{background:#f2ece0;border-radius:6px;padding:6px 8px}
+.esb-acoes{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.esb-item{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)}
+.esb-item>div{flex:1 1 100%}
+#meus{max-width:440px;width:92vw}
 .problema{margin:.3em 0;font-size:.88rem}
 .entrada{position:sticky;bottom:0;left:0;right:0;background:linear-gradient(to top,var(--bg) 78%,rgba(246,243,238,0));padding:14px 0 16px}
 .forma{display:flex;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:26px;padding:6px 6px 6px 18px;box-shadow:0 2px 10px rgba(60,50,30,.08)}
@@ -82,6 +86,7 @@ dialog .acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex
     <span class="sp"></span>
     <button id="bCfg" class="mini" title="Configurar IA">🤖 <span id="stIA">configurar IA</span></button>
     <button id="bLimpar" class="mini">Limpar conversa</button>
+    <button id="bMeus" class="mini" title="Esboços salvos neste navegador">📜 Meus esboços</button>
   </div>
   <main id="chat"></main>
   <div class="entrada"><div class="forma">
@@ -124,6 +129,12 @@ dialog .acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex
     <button id="cSalvar" class="prim">Salvar</button>
     <button id="cFechar">Fechar</button>
   </div>
+</dialog>
+<dialog id="meus">
+  <h2>📜 Meus esboços</h2>
+  <p class="dica">Salvos apenas neste navegador — não vão para a internet.</p>
+  <div id="listaEsb"></div>
+  <div class="acoes"><button id="mFechar">Fechar</button></div>
 </dialog>
 
 <script>
@@ -503,15 +514,150 @@ function esbEl(d){
   if (d.conclusao) h += '<p><strong>Conclusão:</strong> '+esc(d.conclusao)+'</p>';
   if (d.apelido) h += '<p class="ideia"><strong>📣 Apelo:</strong> '+esc(d.apelido)+'</p>';
   e.innerHTML = h;
-  const b = document.createElement('button'); b.className='mini'; b.textContent='📋 Copiar esboço';
-  b.addEventListener('click', () => {
-    navigator.clipboard.writeText(esbTexto(d)).then(() => {
-      b.textContent='✓ Copiado!'; setTimeout(()=>{ b.textContent='📋 Copiar esboço'; }, 2000);
-    });
-  });
-  e.appendChild(b);
+  const acoes = document.createElement('div'); acoes.className = 'esb-acoes';
+  const bCop = mkBtn('📋 Copiar', () => copiarEsboçoTxt(d, bCop));
+  const bSal = mkBtn('💾 Salvar', () => salvarEsboço(d, bSal));
+  const bSha = mkBtn('📤 Compartilhar', () => compartilharEsboço(d, bSha));
+  const bLnk = mkBtn('🔗 Link', () => linkEsboço(d, bLnk));
+  acoes.append(bCop, bSal, mkBtn('⬇️ Word', () => baixarEsboço(d)), bSha, bLnk);
+  e.appendChild(acoes);
   return e;
 }
+
+/* ---------- salvar / compartilhar / exportar esboço ---------- */
+const mkBtn = (t, fn) => { const b = document.createElement('button'); b.className='mini'; b.textContent=t; b.addEventListener('click', fn); return b; };
+function lerSalvos(){ try{ return JSON.parse(localStorage.getItem('biblia_esbocos')||'[]'); }catch(e){ return []; } }
+function salvarEsboço(d, btn){
+  const salvos = lerSalvos();
+  salvos.unshift({id:Date.now(), ts:new Date().toLocaleDateString('pt-BR'), titulo:d.titulo, esb:d});
+  try{ localStorage.setItem('biblia_esbocos', JSON.stringify(salvos.slice(0,50))); }catch(e){}
+  if (btn){ btn.textContent='✓ Salvo!'; setTimeout(()=>{ btn.textContent='💾 Salvar'; }, 2000); }
+}
+async function copiarEsboçoTxt(d, btn){
+  try{ await navigator.clipboard.writeText(esbTexto(d)); btn.textContent='✓ Copiado!'; }
+  catch(e){ btn.textContent='❌ não consegui copiar'; }
+  setTimeout(()=>{ btn.textContent='📋 Copiar'; }, 2000);
+}
+async function compartilharEsboço(d, btn){
+  const texto = esbTexto(d);
+  if (navigator.share){
+    try{ await navigator.share({title:'Esboço: '+d.titulo, text:texto}); return; }
+    catch(e){ if (e && e.name === 'AbortError') return; }
+  }
+  try{ await navigator.clipboard.writeText(texto); btn.textContent='✓ Copiado!'; }
+  catch(e){ btn.textContent='❌ não consegui copiar'; }
+  setTimeout(()=>{ btn.textContent='📤 Compartilhar'; }, 2000);
+}
+async function linkEsboço(d, btn){
+  if (!window.CompressionStream){ btn.textContent='❌ navegador sem suporte'; setTimeout(()=>{ btn.textContent='🔗 Link'; }, 2000); return; }
+  if (!/^https?:/.test(location.origin)){ btn.textContent='❌ abra o site online'; setTimeout(()=>{ btn.textContent='🔗 Link'; }, 2000); return; }
+  try{
+    const cs = new CompressionStream('gzip');
+    const buf = await new Response(new Blob([JSON.stringify(d)]).stream().pipeThrough(cs)).arrayBuffer();
+    const u8 = new Uint8Array(buf); let s='';
+    for (let i=0;i<u8.length;i+=0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i+0x8000));
+    s = btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    await navigator.clipboard.writeText(location.origin + location.pathname + '#esb=' + s);
+    btn.textContent='✓ Link copiado!';
+  }catch(e){ btn.textContent='❌ não consegui gerar'; }
+  setTimeout(()=>{ btn.textContent='🔗 Link'; }, 2000);
+}
+async function carregarEsboçoHash(b64url){
+  const b64 = b64url.replace(/-/g,'+').replace(/_/g,'/');
+  const bin = atob(b64 + '='.repeat((4 - b64.length % 4) % 4));
+  const u8 = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+  const txt = await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  return parseEsboço(txt);
+}
+/* gerador de .docx em JS puro (ZIP sem compressão) */
+function crc32(u8){
+  let t = crc32.t;
+  if (!t){ t = crc32.t = new Int32Array(256); for (let n=0;n<256;n++){ let c=n; for (let k=0;k<8;k++) c = (c&1) ? (0xEDB88320 ^ (c>>>1)) : (c>>>1); t[n]=c; } }
+  let c = 0xFFFFFFFF;
+  for (let i=0;i<u8.length;i++) c = t[(c ^ u8[i]) & 0xFF] ^ (c>>>8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStore(files){
+  const enc = new TextEncoder(); const partes = []; const central = []; let off = 0;
+  const u16 = v => [v&255,(v>>>8)&255], u32 = v => [v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];
+  for (const f of files){
+    const data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+    const nome = enc.encode(f.name), crc = crc32(data);
+    partes.push(new Uint8Array([...u32(0x04034b50),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(nome.length),...u16(0)]), nome, data);
+    central.push(new Uint8Array([...u32(0x02014b50),...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(data.length),...u32(data.length),...u16(nome.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(off)]), nome);
+    off += 30 + nome.length + data.length;
+  }
+  let cdSize = 0; for (const c of central) cdSize += c.length;
+  const eocd = new Uint8Array([...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdSize),...u32(off),...u16(0)]);
+  const out = new Uint8Array(off + cdSize + eocd.length); let p = 0;
+  for (const c of [...partes, ...central, eocd]){ out.set(c, p); p += c.length; }
+  return out;
+}
+function xmlEsc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c])); }
+function docxEsb(d){
+  const limpaRef = s => String(s||'').replace(/[⟦⟧]/g,'');
+  const R = (t, o) => '<w:r>'+(o?'<w:rPr>'+o+'</w:rPr>':'')+'<w:t xml:space="preserve">'+xmlEsc(t)+'</w:t></w:r>';
+  const P = (runs, sp) => '<w:p><w:pPr>'+(sp?'<w:spacing w:after="'+sp+'"/>':'')+'</w:pPr>'+runs.join('')+'</w:p>';
+  const B = '<w:b/>', SZ = n => '<w:sz w:val="'+n+'"/>';
+  const ps = [P([R(d.titulo, B+SZ(32))], 120)];
+  if (d.passagem) ps.push(P([R(limpaRef(d.passagem), '<w:i/>'+SZ(24))], 200));
+  if (d.ideia_central) ps.push(P([R('Ideia central: ', B), R(d.ideia_central)], 200));
+  ps.push(P([R('INTRODUÇÃO', B)], 60), P([R(d.introducao||'')], 200));
+  d.pontos.forEach((p, i) => {
+    ps.push(P([R((i+1)+'. '+p.titulo+(p.texto?' ('+limpaRef(p.texto)+')':''), B+SZ(24))], 60));
+    if (p.desenvolvimento) ps.push(P([R('Desenvolvimento: ', B), R(p.desenvolvimento)], 120));
+    if (p.ilustracao) ps.push(P([R('Ilustração: ', B), R(p.ilustracao)], 120));
+    if (p.aplicacao) ps.push(P([R('Aplicação: ', B), R(p.aplicacao)], 200));
+  });
+  ps.push(P([R('CONCLUSÃO', B)], 60), P([R(d.conclusao||'')], 200));
+  if (d.apelido) ps.push(P([R('Apelo: ', B), R(d.apelido)], 200));
+  ps.push(P([R('Gerado no app Estudo Bíblico com IA.', '<w:i/>'+SZ(18))], 0));
+  const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+    + ps.join('') + '</w:body></w:document>';
+  const CT = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>';
+  const RL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
+  return zipStore([{name:'[Content_Types].xml', data:CT}, {name:'_rels/.rels', data:RL}, {name:'word/document.xml', data:doc}]);
+}
+function baixarEsboço(d){
+  const u8 = docxEsb(d);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([u8], {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}));
+  a.download = (d.titulo||'esboço').replace(/[^\p{L}\p{N} ]+/gu,'').trim().replace(/\s+/g,' ').slice(0,60) + '.docx';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+}
+function renderMeus(){
+  const salvos = lerSalvos(); const l = $('listaEsb');
+  l.innerHTML = salvos.length ? '' : '<p class="dica">Nenhum esboço salvo ainda.</p>';
+  salvos.forEach(s => {
+    const row = document.createElement('div'); row.className = 'esb-item';
+    row.innerHTML = '<div><strong>'+esc(s.titulo)+'</strong><br><span class="dica">'+esc(s.ts||'')+'</span></div>';
+    row.append(
+      mkBtn('Abrir', () => { msgs.push({role:'user', content:'📜 '+s.titulo}); msgs.push({role:'assist', content:'📋 Esboço: '+s.esb.titulo, esboço:s.esb, versiculos:[]}); render(); $('meus').close(); }),
+      mkBtn('Word', () => baixarEsboço(s.esb)),
+      mkBtn('Excluir', () => { localStorage.setItem('biblia_esbocos', JSON.stringify(lerSalvos().filter(x => x.id !== s.id))); renderMeus(); })
+    );
+    l.appendChild(row);
+  });
+}
+$('bMeus').addEventListener('click', () => { renderMeus(); $('meus').showModal(); });
+$('mFechar').addEventListener('click', () => $('meus').close());
+(async () => {
+  const mh = location.hash.match(/^#esb=([A-Za-z0-9_-]+)/);
+  if (!mh || !window.CompressionStream) return;
+  try{
+    const d = await carregarEsboçoHash(mh[1]);
+    if (d){ msgs.push({role:'user', content:'🔗 Esboço recebido por link'}); msgs.push({role:'assist', content:'📋 Esboço compartilhado: '+d.titulo, esboço:d, versiculos:[]}); render(); }
+  }catch(e){}
+})();
 
 /* ---------- interface ---------- */
 function mdLite(s){
@@ -628,7 +774,7 @@ $('cApagar').addEventListener('click', () => {
 /* gancho para testes automatizados */
 window.__T = {pronto:()=>!!D, extrairRefs, validarResposta, validarRefs, conferirCitacao, contarVersiculos,
               recuperar, buscaPalavras, notasLexicais, rotulo, responder, foraDoContexto, strongsFora,
-              lerCfg, chamarIA, parseEsboço, esbTexto, gerarEsboço, dados:()=>D, FLAT:()=>FLAT};
+              lerCfg, chamarIA, parseEsboço, esbTexto, gerarEsboço, docxEsb, carregarEsboçoHash, lerSalvos, salvarEsboço, dados:()=>D, FLAT:()=>FLAT};
 
 $('inp').disabled = true; $('bEnv').disabled = true;
 boot();
