@@ -43,6 +43,8 @@ main#chat{display:flex;flex-direction:column;gap:12px;padding:6px 0 clamp(120px,
 .esb-item{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)}
 .esb-item>div{flex:1 1 100%}
 #meus{max-width:440px;width:92vw}
+body.vis-esb header, body.vis-esb .barra, body.vis-esb .entrada, body.vis-esb .foot{display:none}
+body.vis-esb #chat{max-width:680px;margin:0 auto;padding:16px 12px 40px}
 .problema{margin:.3em 0;font-size:.88rem}
 .entrada{position:sticky;bottom:0;left:0;right:0;background:linear-gradient(to top,var(--bg) 78%,rgba(246,243,238,0));padding:14px 0 16px}
 .forma{display:flex;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:26px;padding:6px 6px 6px 18px;box-shadow:0 2px 10px rgba(60,50,30,.08)}
@@ -157,6 +159,7 @@ const $ = id => document.getElementById(id);
 let D=null, REF_RE=null, ALIASES=null, NOME=null, STOP=null;
 let FLAT=[], IDX=new Map(), NORMC=null;
 let msgs=[];
+let VIS_ESB=false;
 
 function setLoad(msg, err){ $('loadmsg').textContent = msg; $('loading').classList.toggle('err', !!err); }
 
@@ -499,7 +502,7 @@ async function gerarEsboço(pergunta){
   return {erro:'Não consegui gerar um esboço no formato correto. Tente reformular a passagem.',
           retrieved_ids:versiculos.map(v=>v.rowid)};
 }
-function esbEl(d){
+function esbEl(d, semAcoes){
   const limpaRef = s => String(s||'').replace(/[⟦⟧]/g,'');
   const e = document.createElement('div'); e.className='esb';
   let h = '<h3>📋 '+esc(d.titulo)+(d.passagem?' <span class="passagem">'+esc(limpaRef(d.passagem))+'</span>':'')+'</h3>';
@@ -514,13 +517,15 @@ function esbEl(d){
   if (d.conclusao) h += '<p><strong>Conclusão:</strong> '+esc(d.conclusao)+'</p>';
   if (d.apelido) h += '<p class="ideia"><strong>📣 Apelo:</strong> '+esc(d.apelido)+'</p>';
   e.innerHTML = h;
-  const acoes = document.createElement('div'); acoes.className = 'esb-acoes';
-  const bCop = mkBtn('📋 Copiar', () => copiarEsboçoTxt(d, bCop));
-  const bSal = mkBtn('💾 Salvar', () => salvarEsboço(d, bSal));
-  const bSha = mkBtn('📤 Compartilhar', () => compartilharEsboço(d, bSha));
-  const bLnk = mkBtn('🔗 Link', () => linkEsboço(d, bLnk));
-  acoes.append(bCop, bSal, mkBtn('⬇️ Word', () => baixarEsboço(d)), bSha, bLnk);
-  e.appendChild(acoes);
+  if (!semAcoes){
+    const acoes = document.createElement('div'); acoes.className = 'esb-acoes';
+    const bCop = mkBtn('📋 Copiar', () => copiarEsboçoTxt(d, bCop));
+    const bSal = mkBtn('💾 Salvar', () => salvarEsboço(d, bSal));
+    const bSha = mkBtn('📤 Compartilhar', () => compartilharEsboço(d, bSha));
+    const bLnk = mkBtn('🔗 Link', () => linkEsboço(d, bLnk));
+    acoes.append(bCop, bSal, mkBtn('⬇️ Word', () => baixarEsboço(d)), bSha, bLnk);
+    e.appendChild(acoes);
+  }
   return e;
 }
 
@@ -655,7 +660,12 @@ $('mFechar').addEventListener('click', () => $('meus').close());
   if (!mh || !window.CompressionStream) return;
   try{
     const d = await carregarEsboçoHash(mh[1]);
-    if (d){ msgs.push({role:'user', content:'🔗 Esboço recebido por link'}); msgs.push({role:'assist', content:'📋 Esboço compartilhado: '+d.titulo, esboço:d, versiculos:[]}); render(); }
+    if (d){
+      VIS_ESB = true; document.body.classList.add('vis-esb');
+      const cartao = document.createElement('div'); cartao.className = 'bolha assist';
+      cartao.appendChild(esbEl(d, true));
+      $('chat').innerHTML = ''; $('chat').appendChild(cartao);
+    }
   }catch(e){}
 })();
 
@@ -699,6 +709,7 @@ function bolhaEl(m){
   return div;
 }
 function render(){
+  if (VIS_ESB) return;
   const chat = $('chat'); chat.innerHTML = '';
   for (const m of msgs) chat.appendChild(bolhaEl(m));
   window.scrollTo(0, document.body.scrollHeight);
@@ -774,7 +785,7 @@ $('cApagar').addEventListener('click', () => {
 /* gancho para testes automatizados */
 window.__T = {pronto:()=>!!D, extrairRefs, validarResposta, validarRefs, conferirCitacao, contarVersiculos,
               recuperar, buscaPalavras, notasLexicais, rotulo, responder, foraDoContexto, strongsFora,
-              lerCfg, chamarIA, parseEsboço, esbTexto, gerarEsboço, docxEsb, carregarEsboçoHash, lerSalvos, salvarEsboço, dados:()=>D, FLAT:()=>FLAT};
+              lerCfg, chamarIA, parseEsboço, esbTexto, gerarEsboço, docxEsb, carregarEsboçoHash, lerSalvos, salvarEsboço, esbEl, visEsb:()=>VIS_ESB, dados:()=>D, FLAT:()=>FLAT};
 
 $('inp').disabled = true; $('bEnv').disabled = true;
 boot();
