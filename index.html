@@ -88,15 +88,6 @@ dialog .acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex
     Fontes: WLC/OSHB (CC BY 4.0, openscriptures/morphhb) · SBLGNT + MorphGNT (CC BY-SA, morphgnt/sblgnt) · Strong (OpenScriptures, CC BY-SA).
     A chave da IA fica guardada apenas no seu navegador e é enviada só ao Google. Sem chave, o app funciona em modo somente busca.</p>
     <details>
-      <summary>Como colocar este site online (grátis)</summary>
-      <ul>
-        <li><strong>GitHub Pages</strong>: crie um repositório público no github.com, envie este arquivo renomeado para <code>index.html</code> e ative <em>Settings → Pages</em>. O site fica em <code>seuusuario.github.io/repositorio</code>.</li>
-        <li><strong>Netlify Drop</strong>: em app.netlify.com/drop, arraste o arquivo (necessita login gratuito).</li>
-        <li><strong>No computador/celular</strong>: dê dois cliques no arquivo — a busca funciona até offline; só a IA precisa de internet.</li>
-        <li><strong>Versão completa</strong> (com léxico integral e banco no servidor): publique o pacote <code>biblia-ia.zip</code> no Streamlit Community Cloud, como descrito no README.</li>
-      </ul>
-    </details>
-    <details>
       <summary>Limitações desta versão web</summary>
       <ul>
         <li>Léxico em resumo: sem as definições completas em inglês e sem notas do CSV (o sentido vem do glossário em português).</li>
@@ -109,10 +100,18 @@ dialog .acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex
 
 <dialog id="cfg">
   <h2>🤖 Configurar a IA</h2>
-  <p class="aviso">A chave gratuita fica só no seu navegador (localStorage) e é enviada apenas ao Google.</p>
-  <label for="cModelo">Modelo (confira o nome atual no AI Studio)</label>
+  <p class="aviso">A chave fica só no seu navegador e é enviada apenas ao provedor que você escolher. Todos têm plano gratuito.</p>
+  <label for="cProv">Provedor da IA</label>
+  <select id="cProv" style="width:100%">
+    <option value="gemini">Google Gemini (AI Studio) — recomendado</option>
+    <option value="openrouter">OpenRouter (modelos gratuitos)</option>
+    <option value="mistral">Mistral La Plateforme</option>
+    <option value="huggingface">Hugging Face (Inference)</option>
+  </select>
+  <p class="dica" id="cAjuda"></p>
+  <label for="cModelo">Modelo</label>
   <input type="text" id="cModelo" placeholder="ex.: gemini-flash-latest">
-  <label for="cChave">Chave da API (aistudio.google.com → Get API key)</label>
+  <label for="cChave">Chave da API</label>
   <input type="password" id="cChave" placeholder="cole sua chave aqui">
   <p class="dica"><label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="cExpand" checked style="width:auto"> Busca assistida por IA (expande a consulta; usa 1 chamada extra por pergunta)</label></p>
   <div class="acoes">
@@ -319,10 +318,21 @@ function notasLexicais(vs, max=12){
 }
 
 /* ---------- IA ---------- */
+const PROVS = {
+  gemini:{nome:'Google Gemini', model:'gemini-flash-latest',
+    ajuda:'1) acesse aistudio.google.com com sua conta Google · 2) clique em "Get API key" e depois em "Create API key" · 3) cole a chave aqui. É o plano gratuito mais generoso — recomendado.'},
+  openrouter:{nome:'OpenRouter', base:'https://openrouter.ai/api/v1/chat/completions', model:'meta-llama/llama-3.3-70b-instruct:free',
+    ajuda:'1) crie conta em openrouter.ai · 2) menu → Keys → "Create key" · 3) cole a chave aqui. No campo Modelo use um nome terminado em :free — a lista atual está em openrouter.ai/models (os gratuitos mudam com frequência).'},
+  mistral:{nome:'Mistral', base:'https://api.mistral.ai/v1/chat/completions', model:'mistral-small-latest',
+    ajuda:'1) crie conta em console.mistral.ai · 2) escolha o plano gratuito "Experiment" · 3) API Keys → "Create new key" · 4) cole aqui. Tem limite de requisições por minuto.'},
+  huggingface:{nome:'Hugging Face', base:'https://router.huggingface.co/v1/chat/completions', model:'meta-llama/Llama-3.3-70B-Instruct',
+    ajuda:'1) crie conta em huggingface.co · 2) Settings → Access Tokens → "Create new token" com permissão "Make calls to Inference Providers" · 3) cole aqui. Usa créditos gratuitos mensais.'}
+};
 function lerCfg(){
   let c = {};
   try{ c = JSON.parse(localStorage.getItem('biblia_cfg')||'{}'); }catch(e){}
-  return {model:(c.model||'gemini-flash-latest').trim(), key:(c.key||'').trim(), expand:c.expand!==false};
+  const prov = PROVS[c.prov] ? c.prov : 'gemini';
+  return {prov, model:(c.model||'').trim()||PROVS[prov].model, key:(c.key||'').trim(), expand:c.expand!==false};
 }
 async function gemini(cfg, sys, user, maxTok){
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(cfg.model)+':generateContent?key='+encodeURIComponent(cfg.key);
@@ -342,9 +352,30 @@ async function gemini(cfg, sys, user, maxTok){
   if (!texto) throw new Error('O modelo devolveu resposta vazia (verifique o nome do modelo e a chave).');
   return texto;
 }
+async function chamarIA(cfg, sys, user, maxTok){
+  if (cfg.prov === 'gemini') return gemini(cfg, sys, user, maxTok);
+  const p = PROVS[cfg.prov];
+  const cab = {'Content-Type':'application/json', 'Authorization':'Bearer '+cfg.key};
+  if (cfg.prov === 'openrouter'){ cab['HTTP-Referer'] = location.origin; cab['X-Title'] = 'Estudo Bíblico'; }
+  let r;
+  try{ r = await fetch(p.base, {method:'POST', headers:cab,
+    body:JSON.stringify({model:cfg.model, temperature:0.2, max_tokens:maxTok,
+      messages:[{role:'system',content:sys},{role:'user',content:user}]})}); }
+  catch(e){ throw new Error('Não consegui conectar ao provedor ('+e.message+'). Verifique sua internet.'); }
+  if (!r.ok){
+    const t = await r.text();
+    if (r.status===401||r.status===403) throw new Error('Chave rejeitada pelo '+p.nome+' (erro '+r.status+'). Confira a chave e o nome do modelo.');
+    if (r.status===429) throw new Error('Limite do plano gratuito do '+p.nome+' atingido (429). Aguarde e tente de novo.');
+    throw new Error('Erro '+r.status+' do '+p.nome+': '+t.slice(0,300));
+  }
+  const d = await r.json();
+  const texto = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+  if (!texto) throw new Error('O '+p.nome+' devolveu resposta vazia (verifique o nome do modelo).');
+  return texto;
+}
 async function expandirConsulta(cfg, pergunta){
   try{
-    const texto = await gemini(cfg, D.exp, pergunta, 300);
+    const texto = await chamarIA(cfg, D.exp, pergunta, 300);
     const m = texto.match(/\{[\s\S]*\}/);
     const d = m ? JSON.parse(m[0]) : {};
     const l = (xs,n)=> (xs||[]).map(x=>String(x).trim()).filter(Boolean).slice(0,n);
@@ -372,7 +403,7 @@ async function responder(pergunta, modo){
   const lexico = notasLexicais(versiculos);
   let problemas=[], resposta='', status='bloqueada', t=1;
   for (t=1; t<=3; t++){
-    resposta = await gemini(cfg, D.sys, msgUser(modo, pergunta, contexto, lexico, problemas.length?problemas:null), 1500);
+    resposta = await chamarIA(cfg, D.sys, msgUser(modo, pergunta, contexto, lexico, problemas.length?problemas:null), 1500);
     const res = validarResposta(resposta);
     problemas = res.problemas.concat(foraDoContexto(resposta, versiculos), strongsFora(resposta, lexico));
     if (!problemas.length){ status='ok'; break; }
@@ -427,7 +458,7 @@ function render(){
 }
 function atualizaChipIA(){
   const c = lerCfg();
-  $('stIA').textContent = c.key ? (c.model+' · IA ativa') : 'configurar IA (somente busca)';
+  $('stIA').textContent = c.key ? (PROVS[c.prov].nome+' · '+c.model+' · IA ativa') : 'configurar IA (somente busca)';
 }
 let ocupado = false;
 async function enviar(){
@@ -461,25 +492,34 @@ async function enviar(){
 $('bEnv').addEventListener('click', enviar);
 $('inp').addEventListener('keydown', e => { if (e.key==='Enter') enviar(); });
 $('bLimpar').addEventListener('click', () => { msgs=[]; render(); });
+function atualizaAjudaProv(){
+  const p = PROVS[$('cProv').value] || PROVS.gemini;
+  $('cAjuda').textContent = p.ajuda;
+  $('cModelo').placeholder = 'ex.: '+p.model;
+}
+$('cProv').addEventListener('change', () => {
+  $('cModelo').value = PROVS[$('cProv').value].model;
+  atualizaAjudaProv();
+});
 $('bCfg').addEventListener('click', () => {
   const c = lerCfg();
-  $('cModelo').value = c.model; $('cChave').value = c.key; $('cExpand').checked = c.expand;
-  $('cfg').showModal();
+  $('cProv').value = c.prov; $('cModelo').value = c.model; $('cChave').value = c.key; $('cExpand').checked = c.expand;
+  atualizaAjudaProv(); $('cfg').showModal();
 });
 $('cFechar').addEventListener('click', () => $('cfg').close());
 $('cSalvar').addEventListener('click', () => {
-  localStorage.setItem('biblia_cfg', JSON.stringify({model:$('cModelo').value, key:$('cChave').value, expand:$('cExpand').checked}));
+  localStorage.setItem('biblia_cfg', JSON.stringify({prov:$('cProv').value, model:$('cModelo').value, key:$('cChave').value, expand:$('cExpand').checked}));
   atualizaChipIA(); $('cfg').close();
 });
 $('cApagar').addEventListener('click', () => {
   localStorage.removeItem('biblia_cfg');
-  $('cModelo').value=''; $('cChave').value=''; atualizaChipIA();
+  $('cProv').value='gemini'; $('cModelo').value=PROVS.gemini.model; $('cChave').value=''; atualizaAjudaProv(); atualizaChipIA();
 });
 
 /* gancho para testes automatizados */
 window.__T = {pronto:()=>!!D, extrairRefs, validarResposta, validarRefs, conferirCitacao, contarVersiculos,
               recuperar, buscaPalavras, notasLexicais, rotulo, responder, foraDoContexto, strongsFora,
-              dados:()=>D, FLAT:()=>FLAT};
+              lerCfg, dados:()=>D, FLAT:()=>FLAT};
 
 $('inp').disabled = true; $('bEnv').disabled = true;
 boot();
