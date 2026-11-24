@@ -321,8 +321,8 @@ function notasLexicais(vs, max=12){
 const PROVS = {
   gemini:{nome:'Google Gemini', model:'gemini-flash-latest',
     ajuda:'1) acesse aistudio.google.com com sua conta Google · 2) clique em "Get API key" e depois em "Create API key" · 3) cole a chave aqui. É o plano gratuito mais generoso — recomendado.'},
-  openrouter:{nome:'OpenRouter', base:'https://openrouter.ai/api/v1/chat/completions', model:'meta-llama/llama-3.3-70b-instruct:free',
-    ajuda:'1) crie conta em openrouter.ai · 2) menu → Keys → "Create key" · 3) cole a chave aqui. No campo Modelo use um nome terminado em :free — a lista atual está em openrouter.ai/models (os gratuitos mudam com frequência).'},
+  openrouter:{nome:'OpenRouter', base:'https://openrouter.ai/api/v1/chat/completions', model:'google/gemma-4-31b-it:free',
+    ajuda:'1) crie conta em openrouter.ai · 2) menu → Keys → "Create key" · 3) cole a chave aqui. No campo Modelo use um nome terminado em :free — lista atual: openrouter.ai/models?max_price=0. Se um modelo gratuito sair do ar, o app tenta outros automaticamente.'},
   mistral:{nome:'Mistral', base:'https://api.mistral.ai/v1/chat/completions', model:'mistral-small-latest',
     ajuda:'1) crie conta em console.mistral.ai · 2) escolha o plano gratuito "Experiment" · 3) API Keys → "Create new key" · 4) cole aqui. Tem limite de requisições por minuto.'},
   huggingface:{nome:'Hugging Face', base:'https://router.huggingface.co/v1/chat/completions', model:'meta-llama/Llama-3.3-70B-Instruct',
@@ -352,26 +352,40 @@ async function gemini(cfg, sys, user, maxTok){
   if (!texto) throw new Error('O modelo devolveu resposta vazia (verifique o nome do modelo e a chave).');
   return texto;
 }
+/* modelos gratuitos do OpenRouter verificados em 24/11/2026; fallback se o modelo salvo sair do ar */
+const OR_GRATIS = ['google/gemma-4-31b-it:free','nvidia/nemotron-3-ultra-550b-a55b:free','inclusionai/ling-3.2-flash:free','baidu/ernie-5.5-flash-preview:free'];
 async function chamarIA(cfg, sys, user, maxTok){
   if (cfg.prov === 'gemini') return gemini(cfg, sys, user, maxTok);
   const p = PROVS[cfg.prov];
   const cab = {'Content-Type':'application/json', 'Authorization':'Bearer '+cfg.key};
   if (cfg.prov === 'openrouter'){ cab['HTTP-Referer'] = location.origin; cab['X-Title'] = 'Estudo Bíblico'; }
-  let r;
-  try{ r = await fetch(p.base, {method:'POST', headers:cab,
-    body:JSON.stringify({model:cfg.model, temperature:0.2, max_tokens:maxTok,
-      messages:[{role:'system',content:sys},{role:'user',content:user}]})}); }
-  catch(e){ throw new Error('Não consegui conectar ao provedor ('+e.message+'). Verifique sua internet.'); }
-  if (!r.ok){
-    const t = await r.text();
-    if (r.status===401||r.status===403) throw new Error('Chave rejeitada pelo '+p.nome+' (erro '+r.status+'). Confira a chave e o nome do modelo.');
-    if (r.status===429) throw new Error('Limite do plano gratuito do '+p.nome+' atingido (429). Aguarde e tente de novo.');
-    throw new Error('Erro '+r.status+' do '+p.nome+': '+t.slice(0,300));
+  const modelos = cfg.prov==='openrouter' ? [cfg.model].concat(OR_GRATIS.filter(m=>m!==cfg.model)) : [cfg.model];
+  let ultimoErro = null;
+  for (const mo of modelos){
+    let r;
+    try{ r = await fetch(p.base, {method:'POST', headers:cab,
+      body:JSON.stringify({model:mo, temperature:0.2, max_tokens:maxTok,
+        messages:[{role:'system',content:sys},{role:'user',content:user}]})}); }
+    catch(e){ throw new Error('Não consegui conectar ao provedor ('+e.message+'). Verifique sua internet.'); }
+    if (!r.ok){
+      const t = await r.text();
+      if (r.status===401||r.status===403) throw new Error('Chave rejeitada pelo '+p.nome+' (erro '+r.status+'). Confira a chave e o nome do modelo.');
+      if (r.status===402) throw new Error('Créditos do '+p.nome+' insuficientes (402). Use um modelo terminado em :free no campo Modelo.');
+      if ((r.status===404 && /unavailable|no endpoints|not found/i.test(t)) || r.status===429){
+        ultimoErro = new Error('Nenhum modelo gratuito do '+p.nome+' respondeu (erro '+r.status+'). Abra 🤖 e escolha outro modelo — lista atual: openrouter.ai/models?max_price=0');
+        continue;
+      }
+      throw new Error('Erro '+r.status+' do '+p.nome+': '+t.slice(0,300));
+    }
+    const d = await r.json();
+    const texto = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
+    if (!texto) throw new Error('O '+p.nome+' devolveu resposta vazia (verifique o nome do modelo).');
+    if (mo !== cfg.model){
+      try{ const c = JSON.parse(localStorage.getItem('biblia_cfg')||'{}'); c.model = mo; localStorage.setItem('biblia_cfg', JSON.stringify(c)); }catch(e){}
+    }
+    return texto;
   }
-  const d = await r.json();
-  const texto = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
-  if (!texto) throw new Error('O '+p.nome+' devolveu resposta vazia (verifique o nome do modelo).');
-  return texto;
+  throw ultimoErro || new Error('Nenhum modelo gratuito do '+p.nome+' respondeu. Abra 🤖 e escolha outro em openrouter.ai/models?max_price=0');
 }
 async function expandirConsulta(cfg, pergunta){
   try{
@@ -519,7 +533,7 @@ $('cApagar').addEventListener('click', () => {
 /* gancho para testes automatizados */
 window.__T = {pronto:()=>!!D, extrairRefs, validarResposta, validarRefs, conferirCitacao, contarVersiculos,
               recuperar, buscaPalavras, notasLexicais, rotulo, responder, foraDoContexto, strongsFora,
-              lerCfg, dados:()=>D, FLAT:()=>FLAT};
+              lerCfg, chamarIA, dados:()=>D, FLAT:()=>FLAT};
 
 $('inp').disabled = true; $('bEnv').disabled = true;
 boot();
